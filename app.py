@@ -47,11 +47,19 @@ with tabs[1]:
 
         st.dataframe(filtered_df)
 
-        st.download_button(
-            "📥 Download Excel Report",
-            data=filtered_df.to_excel(index=False),
-            file_name=f"report_{datetime.now().strftime('%Y%m%d')}.xlsx"
-        )
+        import io
+
+buffer = io.BytesIO()
+filtered_df.to_excel(buffer, index=False, engine="openpyxl")
+buffer.seek(0)
+
+st.download_button(
+    label="📥 Download Excel Report",
+    data=buffer,
+    file_name=f"report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
 
 # -------------------------
 # TAB 3: Tasks
