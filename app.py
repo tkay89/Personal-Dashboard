@@ -7,6 +7,9 @@ st.set_page_config(page_title="Personal Command Center", layout="wide")
 st.title("📊 Personal Command Center Dashboard")
 
 tabs = st.tabs(["📊 Overview", "📁 Upload & Preview", "📈 Reports", "📝 Tasks"])
+with tabs[0]:
+    st.header("Overview Dashboard")
+    st.write("Stats and graphs will appear here soon.")
 
 # -------------------------
 # TAB 1: Upload & Preview
