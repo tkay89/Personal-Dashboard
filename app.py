@@ -6,12 +6,12 @@ st.set_page_config(page_title="Personal Command Center", layout="wide")
 
 st.title("📊 Personal Command Center Dashboard")
 
-tabs = st.tabs(["📁 Upload & Preview", "📈 Reports", "📝 Tasks"])
+tabs = st.tabs(["📊 Overview", "📁 Upload & Preview", "📈 Reports", "📝 Tasks"])
 
 # -------------------------
 # TAB 1: Upload & Preview
 # -------------------------
-with tabs[0]:
+with tabs[1]:
     st.header("Upload CSV or Excel")
     uploaded_file = st.file_uploader("Upload a file", type=["csv", "xlsx"])
 
