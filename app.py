@@ -9,19 +9,20 @@ st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
 
 # ---------------------------
-# PERMANENT SALESFORCE LOADER
+# FINAL SALESFORCE LOADER
 # ---------------------------
 def load_salesforce_file(file):
 
+    # Load raw file without header
     if file.name.endswith(".csv"):
         raw = pd.read_csv(file, header=None, dtype=str)
     else:
         raw = pd.read_excel(file, header=None, dtype=str)
 
-    # Find header row
+    # Detect header row by 'Case Number'
     header_row = None
     for i, row in raw.iterrows():
-        if "Case Number" in row.values:
+        if row.astype(str).str.contains("Case Number").any():
             header_row = i
             break
 
@@ -29,31 +30,28 @@ def load_salesforce_file(file):
         st.error("Could not detect Case Number header.")
         st.stop()
 
-    # Reload clean dataframe
+    # Load properly from header row down
     if file.name.endswith(".csv"):
-        df = pd.read_csv(file, skiprows=header_row, dtype=str)
+        df = pd.read_csv(file, skiprows=header_row)
     else:
-        df = pd.read_excel(file, skiprows=header_row, dtype=str)
+        df = pd.read_excel(file, skiprows=header_row)
 
-    # Remove fully blank rows
-    df = df.dropna(how="all")
-
-    # Remove totals/subtotals safely
+    # Drop only totals rows explicitly
     if "Case Number" in df.columns:
-        df = df[~df["Case Number"].astype(str).str.contains("Total", case=False, na=False)]
+        df = df[
+            ~df["Case Number"]
+            .astype(str)
+            .str.contains("Total|Sum", case=False, na=False)
+        ]
 
-    # Keep rows that look like real cases
-    keep_cols = ["Case Number", "Block Name", "Fiberhood Name"]
-    existing = [c for c in keep_cols if c in df.columns]
-
-    if existing:
-        df = df[df[existing].notna().any(axis=1)]
+    # Reset index cleanly
+    df = df.reset_index(drop=True)
 
     return df
 
 
 # ---------------------------
-# BLOCK PARSER
+# PARSE BLOCK NAME
 # ---------------------------
 def parse_block_name(df):
 
@@ -95,7 +93,7 @@ with tabs[1]:
         st.session_state["data"] = df
 
         st.success(f"{len(df)} cases loaded successfully.")
-        st.dataframe(df.tail(10))
+        st.dataframe(df)
 
 
 # ---------------------------
