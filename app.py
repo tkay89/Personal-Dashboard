@@ -3,28 +3,27 @@ import pandas as pd
 import io
 from datetime import datetime
 
-st.set_page_config(page_title="Fiber Maintenance Dashboard", layout="wide")
+st.set_page_config(page_title="Fiber Maintenance Intelligence", layout="wide")
 
 st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
 # ---------------------------
-# AUTO HEADER DETECTION
+# SMART SALESFORCE FILE LOADER
 # ---------------------------
 def load_salesforce_file(file):
 
-    # Load raw without assuming headers
+    # Load raw first (no headers)
     if file.name.endswith(".csv"):
         raw = pd.read_csv(file, header=None)
     else:
         raw = pd.read_excel(file, header=None)
 
+    # Detect header row reliably
+    keywords = ["Case Number", "Block Name", "Case Status", "Total Days Open"]
+
     header_row = None
-
-    # Detect header row by known Salesforce column names
-    keywords = ["Case Number", "Block Name", "Case Status", "Date/Time Opened"]
-
     for i, row in raw.iterrows():
-        if any(k in str(cell) for cell in row for k in keywords):
+        if sum(any(k in str(cell) for k in keywords) for cell in row) >= 2:
             header_row = i
             break
 
@@ -32,7 +31,7 @@ def load_salesforce_file(file):
         st.error("Could not detect header row.")
         st.stop()
 
-    # Reload properly with detected header
+    # Reload clean dataframe
     if file.name.endswith(".csv"):
         df = pd.read_csv(file, skiprows=header_row)
     else:
@@ -42,7 +41,7 @@ def load_salesforce_file(file):
 
 
 # ---------------------------
-# BLOCK NAME PARSING
+# PARSE BLOCK NAME → Zone/AG/Block
 # ---------------------------
 def parse_block_name(df):
 
@@ -63,7 +62,7 @@ def parse_block_name(df):
 # ---------------------------
 tabs = st.tabs([
     "📊 Overview",
-    "📁 Upload Data",
+    "📁 Upload",
     "📈 Reports",
     "📝 Tasks"
 ])
@@ -76,32 +75,32 @@ with tabs[1]:
 
     st.header("Upload Salesforce Export")
 
-    file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+    file = st.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
 
     if file:
-
         df = load_salesforce_file(file)
         df = parse_block_name(df)
 
         st.session_state["data"] = df
 
-        st.success("File loaded, cleaned and parsed.")
-        st.dataframe(df.head(20))
+        st.success("File loaded and cleaned.")
+        st.dataframe(df.head(15))
 
 
 # ---------------------------
-# OVERVIEW TAB
+# OVERVIEW TAB (MAIN INTELLIGENCE)
 # ---------------------------
 with tabs[0]:
 
-    st.header("Network Overview")
+    st.header("Network Health Overview")
 
     if "data" not in st.session_state:
-        st.info("Upload data first.")
+        st.info("Upload a Salesforce export first.")
     else:
         df = st.session_state["data"]
 
-        col1, col2, col3 = st.columns(3)
+        # --- Snapshot KPIs ---
+        col1, col2, col3, col4 = st.columns(4)
 
         col1.metric("Total Tickets", len(df))
 
@@ -111,19 +110,50 @@ with tabs[0]:
         if "AG" in df.columns:
             col3.metric("AGs Impacted", df["AG"].nunique())
 
+        if "Total Days Open" in df.columns:
+            aging = df[df["Total Days Open"] > 3]
+            col4.metric("Aging Tickets (>3 days)", len(aging))
+
         st.divider()
 
+        # --- CLUSTER DETECTION ---
         if "Zone" in df.columns:
-            st.subheader("Tickets per Zone")
-            st.bar_chart(df["Zone"].value_counts())
+            st.subheader("🚨 Zone Hotspots")
+            zone_counts = df["Zone"].value_counts()
+            st.bar_chart(zone_counts)
 
         if "AG" in df.columns:
-            st.subheader("Top AG Hotspots")
-            st.bar_chart(df["AG"].value_counts().head(10))
+            st.subheader("🚨 AG Hotspots")
+            ag_counts = df["AG"].value_counts()
+            st.bar_chart(ag_counts.head(10))
 
         if "Block" in df.columns:
-            st.subheader("Top Blocks")
-            st.bar_chart(df["Block"].value_counts().head(10))
+            st.subheader("🚨 Block Concentration")
+            block_counts = df["Block"].value_counts()
+            st.bar_chart(block_counts.head(10))
+
+        # --- AUTO RISK FLAGS ---
+        st.subheader("⚠️ High Risk Indicators")
+
+        risk_notes = []
+
+        if "Total Days Open" in df.columns:
+            if (df["Total Days Open"] > 5).any():
+                risk_notes.append("Aging tickets detected (>5 days).")
+
+        if "AG" in df.columns:
+            if df["AG"].value_counts().max() > 5:
+                risk_notes.append("High AG concentration detected.")
+
+        if "Zone" in df.columns:
+            if df["Zone"].value_counts().max() > 8:
+                risk_notes.append("Zone experiencing heavy ticket volume.")
+
+        if risk_notes:
+            for note in risk_notes:
+                st.warning(note)
+        else:
+            st.success("Network appears stable.")
 
 
 # ---------------------------
@@ -138,10 +168,16 @@ with tabs[2]:
     else:
         df = st.session_state["data"]
 
+        # Select important columns first
+        default_cols = [
+            c for c in df.columns
+            if c in ["Case Number", "Zone", "AG", "Block", "Case Status", "Total Days Open"]
+        ]
+
         cols = st.multiselect(
-            "Select columns",
+            "Select columns to view",
             df.columns.tolist(),
-            default=df.columns.tolist()
+            default=default_cols
         )
 
         filtered_df = df[cols]
@@ -152,9 +188,9 @@ with tabs[2]:
         buffer.seek(0)
 
         st.download_button(
-            label="📥 Download Excel Report",
-            data=buffer,
-            file_name=f"report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            "📥 Download Excel Report",
+            buffer,
+            f"report_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
@@ -170,7 +206,6 @@ with tabs[3]:
         st.session_state["tasks"] = []
 
     with st.form("task_form"):
-
         task = st.text_input("Task")
         due = st.date_input("Due Date")
         priority = st.selectbox("Priority", ["Low", "Medium", "High"])
