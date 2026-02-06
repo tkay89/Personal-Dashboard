@@ -9,17 +9,15 @@ st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
 
 # ---------------------------
-# FINAL SALESFORCE LOADER
+# FILE LOADER
 # ---------------------------
 def load_salesforce_file(file):
 
-    # Load raw file without header
     if file.name.endswith(".csv"):
         raw = pd.read_csv(file, header=None, dtype=str)
     else:
         raw = pd.read_excel(file, header=None, dtype=str)
 
-    # Detect header row by 'Case Number'
     header_row = None
     for i, row in raw.iterrows():
         if row.astype(str).str.contains("Case Number").any():
@@ -27,16 +25,14 @@ def load_salesforce_file(file):
             break
 
     if header_row is None:
-        st.error("Could not detect Case Number header.")
+        st.error("Header not found.")
         st.stop()
 
-    # Load properly from header row down
     if file.name.endswith(".csv"):
         df = pd.read_csv(file, skiprows=header_row)
     else:
         df = pd.read_excel(file, skiprows=header_row)
 
-    # Drop only totals rows explicitly
     if "Case Number" in df.columns:
         df = df[
             ~df["Case Number"]
@@ -44,10 +40,7 @@ def load_salesforce_file(file):
             .str.contains("Total|Sum", case=False, na=False)
         ]
 
-    # Reset index cleanly
-    df = df.reset_index(drop=True)
-
-    return df
+    return df.reset_index(drop=True)
 
 
 # ---------------------------
@@ -92,50 +85,65 @@ with tabs[1]:
 
         st.session_state["data"] = df
 
-        st.success(f"{len(df)} cases loaded successfully.")
-        st.dataframe(df)
+        st.success(f"{len(df)} cases loaded.")
+        st.dataframe(df.head(15))
 
 
 # ---------------------------
-# OVERVIEW TAB
+# OVERVIEW TAB (DRILL DOWN)
 # ---------------------------
 with tabs[0]:
 
-    st.header("Network Health Overview")
+    st.header("Fault Location Hierarchy")
 
     if "data" not in st.session_state:
         st.info("Upload export first.")
     else:
         df = st.session_state["data"]
 
-        col1, col2, col3, col4 = st.columns(4)
+        # ---------- ZONE LEVEL ----------
+        st.subheader("Zones")
 
-        col1.metric("Total Tickets", len(df))
+        zone_counts = df["Zone"].value_counts()
+        st.bar_chart(zone_counts)
 
-        if "Zone" in df.columns:
-            col2.metric("Zones Impacted", df["Zone"].nunique())
+        selected_zone = st.selectbox(
+            "Select Zone",
+            ["All"] + sorted(df["Zone"].dropna().unique().tolist())
+        )
 
-        if "AG" in df.columns:
-            col3.metric("AGs Impacted", df["AG"].nunique())
+        # ---------- AG LEVEL ----------
+        if selected_zone != "All":
+            zone_df = df[df["Zone"] == selected_zone]
+        else:
+            zone_df = df
 
-        if "Total Days Open" in df.columns:
-            df["Total Days Open"] = pd.to_numeric(df["Total Days Open"], errors="coerce")
-            aging = df[df["Total Days Open"] > 3]
-            col4.metric("Aging Tickets (>3 days)", len(aging))
+        st.subheader("AG Areas")
+
+        ag_counts = zone_df["AG"].value_counts()
+        st.bar_chart(ag_counts)
+
+        selected_ag = st.selectbox(
+            "Select AG",
+            ["All"] + sorted(zone_df["AG"].dropna().unique().tolist())
+        )
+
+        # ---------- BLOCK LEVEL ----------
+        if selected_ag != "All":
+            ag_df = zone_df[zone_df["AG"] == selected_ag]
+        else:
+            ag_df = zone_df
+
+        st.subheader("Blocks")
+
+        block_counts = ag_df["Block"].value_counts()
+        st.bar_chart(block_counts)
 
         st.divider()
 
-        if "Zone" in df.columns:
-            st.subheader("Zone Hotspots")
-            st.bar_chart(df["Zone"].value_counts())
-
-        if "AG" in df.columns:
-            st.subheader("AG Hotspots")
-            st.bar_chart(df["AG"].value_counts().head(10))
-
-        if "Block" in df.columns:
-            st.subheader("Block Concentration")
-            st.bar_chart(df["Block"].value_counts().head(10))
+        # Optional table view
+        st.subheader("Filtered Cases")
+        st.dataframe(ag_df)
 
 
 # ---------------------------
