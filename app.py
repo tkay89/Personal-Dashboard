@@ -8,15 +8,46 @@ st.set_page_config(page_title="Fiber Maintenance Dashboard", layout="wide")
 st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
 # ---------------------------
-# Helper Function
+# AUTO HEADER DETECTION
+# ---------------------------
+def load_salesforce_file(file):
+
+    # Load raw without assuming headers
+    if file.name.endswith(".csv"):
+        raw = pd.read_csv(file, header=None)
+    else:
+        raw = pd.read_excel(file, header=None)
+
+    header_row = None
+
+    # Detect header row by known Salesforce column names
+    keywords = ["Case Number", "Block Name", "Case Status", "Date/Time Opened"]
+
+    for i, row in raw.iterrows():
+        if any(k in str(cell) for cell in row for k in keywords):
+            header_row = i
+            break
+
+    if header_row is None:
+        st.error("Could not detect header row.")
+        st.stop()
+
+    # Reload properly with detected header
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file, skiprows=header_row)
+    else:
+        df = pd.read_excel(file, skiprows=header_row)
+
+    return df
+
+
+# ---------------------------
+# BLOCK NAME PARSING
 # ---------------------------
 def parse_block_name(df):
-    """
-    Parses Block Name like:
-    VR-PHX-25-AG1-B012
-    Into Zone / AG / Block columns.
-    """
+
     if "Block Name" in df.columns:
+
         parts = df["Block Name"].astype(str).str.split("-", expand=True)
 
         if parts.shape[1] >= 5:
@@ -28,7 +59,7 @@ def parse_block_name(df):
 
 
 # ---------------------------
-# Tabs Layout
+# TABS
 # ---------------------------
 tabs = st.tabs([
     "📊 Overview",
@@ -37,32 +68,32 @@ tabs = st.tabs([
     "📝 Tasks"
 ])
 
+
 # ---------------------------
-# TAB 1: Upload
+# UPLOAD TAB
 # ---------------------------
 with tabs[1]:
+
     st.header("Upload Salesforce Export")
 
     file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
     if file:
-        if file.name.endswith(".csv"):
-            df = pd.read_csv(file)
-        else:
-            df = pd.read_excel(file)
 
+        df = load_salesforce_file(file)
         df = parse_block_name(df)
 
         st.session_state["data"] = df
 
-        st.success("File loaded and parsed.")
+        st.success("File loaded, cleaned and parsed.")
         st.dataframe(df.head(20))
 
 
 # ---------------------------
-# TAB 0: Overview
+# OVERVIEW TAB
 # ---------------------------
 with tabs[0]:
+
     st.header("Network Overview")
 
     if "data" not in st.session_state:
@@ -96,9 +127,10 @@ with tabs[0]:
 
 
 # ---------------------------
-# TAB 2: Reports
+# REPORTS TAB
 # ---------------------------
 with tabs[2]:
+
     st.header("Custom Reports")
 
     if "data" not in st.session_state:
@@ -115,7 +147,6 @@ with tabs[2]:
         filtered_df = df[cols]
         st.dataframe(filtered_df)
 
-        # Excel export
         buffer = io.BytesIO()
         filtered_df.to_excel(buffer, index=False, engine="openpyxl")
         buffer.seek(0)
@@ -129,15 +160,17 @@ with tabs[2]:
 
 
 # ---------------------------
-# TAB 3: Tasks
+# TASKS TAB
 # ---------------------------
 with tabs[3]:
+
     st.header("Tasks / Reminders")
 
     if "tasks" not in st.session_state:
         st.session_state["tasks"] = []
 
     with st.form("task_form"):
+
         task = st.text_input("Task")
         due = st.date_input("Due Date")
         priority = st.selectbox("Priority", ["Low", "Medium", "High"])
