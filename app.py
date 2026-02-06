@@ -1,66 +1,105 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import io
+from datetime import datetime
 
-st.set_page_config(page_title="Personal Command Center", layout="wide")
+st.set_page_config(page_title="Fiber Maintenance Dashboard", layout="wide")
 
-st.title("📊 Personal Command Center Dashboard")
+st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
-# Tabs
+# ---------------------------
+# Helper Function
+# ---------------------------
+def parse_block_name(df):
+    """
+    Parses Block Name like:
+    VR-PHX-25-AG1-B012
+    Into Zone / AG / Block columns.
+    """
+    if "Block Name" in df.columns:
+        parts = df["Block Name"].astype(str).str.split("-", expand=True)
+
+        if parts.shape[1] >= 5:
+            df["Zone"] = parts[1] + "-" + parts[2]
+            df["AG"] = parts[3]
+            df["Block"] = parts[4]
+
+    return df
+
+
+# ---------------------------
+# Tabs Layout
+# ---------------------------
 tabs = st.tabs([
     "📊 Overview",
-    "📁 Upload & Preview",
+    "📁 Upload Data",
     "📈 Reports",
     "📝 Tasks"
 ])
 
-# -------------------------
-# TAB 0: Overview
-# -------------------------
-with tabs[0]:
-    st.header("Overview Dashboard")
-    st.write("Stats and graphs will appear here soon.")
-
-    if "data" in st.session_state:
-        df = st.session_state["data"]
-
-        st.subheader("Quick Stats")
-        col1, col2 = st.columns(2)
-        col1.metric("Total Tickets", len(df))
-
-        if "Status" in df.columns:
-            open_cases = df[df["Status"].str.contains("open", case=False, na=False)].shape[0]
-            col2.metric("Open Cases", open_cases)
-
-# -------------------------
-# TAB 1: Upload & Preview
-# -------------------------
+# ---------------------------
+# TAB 1: Upload
+# ---------------------------
 with tabs[1]:
-    st.header("Upload CSV or Excel")
+    st.header("Upload Salesforce Export")
 
-    uploaded_file = st.file_uploader(
-        "Upload a file",
-        type=["csv", "xlsx"]
-    )
+    file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-    if uploaded_file:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
+    if file:
+        if file.name.endswith(".csv"):
+            df = pd.read_csv(file)
         else:
-            df = pd.read_excel(uploaded_file)
+            df = pd.read_excel(file)
 
-        st.success("File loaded successfully")
-        st.dataframe(df.head(50))
+        df = parse_block_name(df)
 
         st.session_state["data"] = df
 
+        st.success("File loaded and parsed.")
+        st.dataframe(df.head(20))
 
-# -------------------------
+
+# ---------------------------
+# TAB 0: Overview
+# ---------------------------
+with tabs[0]:
+    st.header("Network Overview")
+
+    if "data" not in st.session_state:
+        st.info("Upload data first.")
+    else:
+        df = st.session_state["data"]
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Tickets", len(df))
+
+        if "Zone" in df.columns:
+            col2.metric("Zones Impacted", df["Zone"].nunique())
+
+        if "AG" in df.columns:
+            col3.metric("AGs Impacted", df["AG"].nunique())
+
+        st.divider()
+
+        if "Zone" in df.columns:
+            st.subheader("Tickets per Zone")
+            st.bar_chart(df["Zone"].value_counts())
+
+        if "AG" in df.columns:
+            st.subheader("Top AG Hotspots")
+            st.bar_chart(df["AG"].value_counts().head(10))
+
+        if "Block" in df.columns:
+            st.subheader("Top Blocks")
+            st.bar_chart(df["Block"].value_counts().head(10))
+
+
+# ---------------------------
 # TAB 2: Reports
-# -------------------------
+# ---------------------------
 with tabs[2]:
-    st.header("Reports & Filters")
+    st.header("Custom Reports")
 
     if "data" not in st.session_state:
         st.warning("Upload data first.")
@@ -68,15 +107,15 @@ with tabs[2]:
         df = st.session_state["data"]
 
         cols = st.multiselect(
-            "Select columns for report",
-            options=df.columns.tolist(),
+            "Select columns",
+            df.columns.tolist(),
             default=df.columns.tolist()
         )
 
         filtered_df = df[cols]
         st.dataframe(filtered_df)
 
-        # Excel download fix
+        # Excel export
         buffer = io.BytesIO()
         filtered_df.to_excel(buffer, index=False, engine="openpyxl")
         buffer.seek(0)
@@ -85,33 +124,32 @@ with tabs[2]:
             label="📥 Download Excel Report",
             data=buffer,
             file_name=f"report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-offexmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
 
-# -------------------------
+# ---------------------------
 # TAB 3: Tasks
-# -------------------------
+# ---------------------------
 with tabs[3]:
-    st.header("Tasks & Reminders")
+    st.header("Tasks / Reminders")
 
     if "tasks" not in st.session_state:
         st.session_state["tasks"] = []
 
     with st.form("task_form"):
-        title = st.text_input("Task title")
-        due = st.date_input("Due date")
+        task = st.text_input("Task")
+        due = st.date_input("Due Date")
         priority = st.selectbox("Priority", ["Low", "Medium", "High"])
-        submitted = st.form_submit_button("Add Task")
 
-        if submitted and title:
+        submit = st.form_submit_button("Add Task")
+
+        if submit and task:
             st.session_state["tasks"].append({
-                "Title": title,
+                "Task": task,
                 "Due": due,
-                "Priority": priority,
-                "Status": "Open"
+                "Priority": priority
             })
 
     if st.session_state["tasks"]:
-        tasks_df = pd.DataFrame(st.session_state["tasks"])
-        st.dataframe(tasks_df)
+        st.dataframe(pd.DataFrame(st.session_state["tasks"]))
