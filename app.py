@@ -13,13 +13,12 @@ st.title("📡 Fiber Maintenance Intelligence Dashboard")
 # ---------------------------
 def load_salesforce_file(file):
 
-    # Load raw file first
     if file.name.endswith(".csv"):
         raw = pd.read_csv(file, header=None, dtype=str)
     else:
         raw = pd.read_excel(file, header=None, dtype=str)
 
-    # Find header row containing Case Number
+    # Find header row
     header_row = None
     for i, row in raw.iterrows():
         if "Case Number" in row.values:
@@ -30,25 +29,31 @@ def load_salesforce_file(file):
         st.error("Could not detect Case Number header.")
         st.stop()
 
-    # Reload properly
+    # Reload clean dataframe
     if file.name.endswith(".csv"):
-        df = pd.read_csv(file, skiprows=header_row)
+        df = pd.read_csv(file, skiprows=header_row, dtype=str)
     else:
-        df = pd.read_excel(file, skiprows=header_row)
+        df = pd.read_excel(file, skiprows=header_row, dtype=str)
 
-    # Remove blank rows
+    # Remove fully blank rows
     df = df.dropna(how="all")
 
-    # Keep only real cases
+    # Remove totals/subtotals safely
     if "Case Number" in df.columns:
-        df = df[df["Case Number"].notna()]
-        df = df[df["Case Number"].astype(str).str.strip() != ""]
+        df = df[~df["Case Number"].astype(str).str.contains("Total", case=False, na=False)]
+
+    # Keep rows that look like real cases
+    keep_cols = ["Case Number", "Block Name", "Fiberhood Name"]
+    existing = [c for c in keep_cols if c in df.columns]
+
+    if existing:
+        df = df[df[existing].notna().any(axis=1)]
 
     return df
 
 
 # ---------------------------
-# BLOCK NAME PARSER
+# BLOCK PARSER
 # ---------------------------
 def parse_block_name(df):
 
@@ -90,7 +95,7 @@ with tabs[1]:
         st.session_state["data"] = df
 
         st.success(f"{len(df)} cases loaded successfully.")
-        st.dataframe(df.head(20))
+        st.dataframe(df.tail(10))
 
 
 # ---------------------------
@@ -116,6 +121,7 @@ with tabs[0]:
             col3.metric("AGs Impacted", df["AG"].nunique())
 
         if "Total Days Open" in df.columns:
+            df["Total Days Open"] = pd.to_numeric(df["Total Days Open"], errors="coerce")
             aging = df[df["Total Days Open"] > 3]
             col4.metric("Aging Tickets (>3 days)", len(aging))
 
