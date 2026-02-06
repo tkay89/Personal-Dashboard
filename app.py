@@ -9,28 +9,25 @@ st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
 
 # ---------------------------
-# SMART SALESFORCE CLEAN LOADER
+# PERMANENT SALESFORCE LOADER
 # ---------------------------
 def load_salesforce_file(file):
 
-    # Read raw first
+    # Load raw file first
     if file.name.endswith(".csv"):
-        raw = pd.read_csv(file, header=None)
+        raw = pd.read_csv(file, header=None, dtype=str)
     else:
-        raw = pd.read_excel(file, header=None)
+        raw = pd.read_excel(file, header=None, dtype=str)
 
-    # Identify header row by multiple keywords
-    keywords = ["Case Number", "Block Name", "Case Status"]
-
+    # Find header row containing Case Number
     header_row = None
     for i, row in raw.iterrows():
-        hits = sum(any(k in str(cell) for k in keywords) for cell in row)
-        if hits >= 2:
+        if "Case Number" in row.values:
             header_row = i
             break
 
     if header_row is None:
-        st.error("Header row not found.")
+        st.error("Could not detect Case Number header.")
         st.stop()
 
     # Reload properly
@@ -39,11 +36,13 @@ def load_salesforce_file(file):
     else:
         df = pd.read_excel(file, skiprows=header_row)
 
-    # Remove subtotal / blank rows
+    # Remove blank rows
     df = df.dropna(how="all")
 
+    # Keep only real cases
     if "Case Number" in df.columns:
         df = df[df["Case Number"].notna()]
+        df = df[df["Case Number"].astype(str).str.strip() != ""]
 
     return df
 
@@ -90,7 +89,7 @@ with tabs[1]:
 
         st.session_state["data"] = df
 
-        st.success(f"{len(df)} cases loaded.")
+        st.success(f"{len(df)} cases loaded successfully.")
         st.dataframe(df.head(20))
 
 
@@ -147,16 +146,10 @@ with tabs[2]:
     else:
         df = st.session_state["data"]
 
-        default_cols = [
-            c for c in df.columns
-            if c in ["Case Number", "Zone", "AG", "Block",
-                     "Case Status", "Total Days Open"]
-        ]
-
         cols = st.multiselect(
             "Select columns",
             df.columns.tolist(),
-            default=default_cols
+            default=df.columns.tolist()
         )
 
         filtered_df = df[cols]
