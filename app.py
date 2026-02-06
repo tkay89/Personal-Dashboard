@@ -7,46 +7,53 @@ st.set_page_config(page_title="Fiber Maintenance Intelligence", layout="wide")
 
 st.title("📡 Fiber Maintenance Intelligence Dashboard")
 
+
 # ---------------------------
-# SMART SALESFORCE FILE LOADER
+# SMART SALESFORCE CLEAN LOADER
 # ---------------------------
 def load_salesforce_file(file):
 
-    # Load raw first (no headers)
+    # Read raw first
     if file.name.endswith(".csv"):
         raw = pd.read_csv(file, header=None)
     else:
         raw = pd.read_excel(file, header=None)
 
-    # Detect header row reliably
-    keywords = ["Case Number", "Block Name", "Case Status", "Total Days Open"]
+    # Identify header row by multiple keywords
+    keywords = ["Case Number", "Block Name", "Case Status"]
 
     header_row = None
     for i, row in raw.iterrows():
-        if sum(any(k in str(cell) for k in keywords) for cell in row) >= 2:
+        hits = sum(any(k in str(cell) for k in keywords) for cell in row)
+        if hits >= 2:
             header_row = i
             break
 
     if header_row is None:
-        st.error("Could not detect header row.")
+        st.error("Header row not found.")
         st.stop()
 
-    # Reload clean dataframe
+    # Reload properly
     if file.name.endswith(".csv"):
         df = pd.read_csv(file, skiprows=header_row)
     else:
         df = pd.read_excel(file, skiprows=header_row)
 
+    # Remove subtotal / blank rows
+    df = df.dropna(how="all")
+
+    if "Case Number" in df.columns:
+        df = df[df["Case Number"].notna()]
+
     return df
 
 
 # ---------------------------
-# PARSE BLOCK NAME → Zone/AG/Block
+# BLOCK NAME PARSER
 # ---------------------------
 def parse_block_name(df):
 
     if "Block Name" in df.columns:
-
         parts = df["Block Name"].astype(str).str.split("-", expand=True)
 
         if parts.shape[1] >= 5:
@@ -83,23 +90,22 @@ with tabs[1]:
 
         st.session_state["data"] = df
 
-        st.success("File loaded and cleaned.")
-        st.dataframe(df.head(15))
+        st.success(f"{len(df)} cases loaded.")
+        st.dataframe(df.head(20))
 
 
 # ---------------------------
-# OVERVIEW TAB (MAIN INTELLIGENCE)
+# OVERVIEW TAB
 # ---------------------------
 with tabs[0]:
 
     st.header("Network Health Overview")
 
     if "data" not in st.session_state:
-        st.info("Upload a Salesforce export first.")
+        st.info("Upload export first.")
     else:
         df = st.session_state["data"]
 
-        # --- Snapshot KPIs ---
         col1, col2, col3, col4 = st.columns(4)
 
         col1.metric("Total Tickets", len(df))
@@ -116,44 +122,17 @@ with tabs[0]:
 
         st.divider()
 
-        # --- CLUSTER DETECTION ---
         if "Zone" in df.columns:
-            st.subheader("🚨 Zone Hotspots")
-            zone_counts = df["Zone"].value_counts()
-            st.bar_chart(zone_counts)
+            st.subheader("Zone Hotspots")
+            st.bar_chart(df["Zone"].value_counts())
 
         if "AG" in df.columns:
-            st.subheader("🚨 AG Hotspots")
-            ag_counts = df["AG"].value_counts()
-            st.bar_chart(ag_counts.head(10))
+            st.subheader("AG Hotspots")
+            st.bar_chart(df["AG"].value_counts().head(10))
 
         if "Block" in df.columns:
-            st.subheader("🚨 Block Concentration")
-            block_counts = df["Block"].value_counts()
-            st.bar_chart(block_counts.head(10))
-
-        # --- AUTO RISK FLAGS ---
-        st.subheader("⚠️ High Risk Indicators")
-
-        risk_notes = []
-
-        if "Total Days Open" in df.columns:
-            if (df["Total Days Open"] > 5).any():
-                risk_notes.append("Aging tickets detected (>5 days).")
-
-        if "AG" in df.columns:
-            if df["AG"].value_counts().max() > 5:
-                risk_notes.append("High AG concentration detected.")
-
-        if "Zone" in df.columns:
-            if df["Zone"].value_counts().max() > 8:
-                risk_notes.append("Zone experiencing heavy ticket volume.")
-
-        if risk_notes:
-            for note in risk_notes:
-                st.warning(note)
-        else:
-            st.success("Network appears stable.")
+            st.subheader("Block Concentration")
+            st.bar_chart(df["Block"].value_counts().head(10))
 
 
 # ---------------------------
@@ -168,14 +147,14 @@ with tabs[2]:
     else:
         df = st.session_state["data"]
 
-        # Select important columns first
         default_cols = [
             c for c in df.columns
-            if c in ["Case Number", "Zone", "AG", "Block", "Case Status", "Total Days Open"]
+            if c in ["Case Number", "Zone", "AG", "Block",
+                     "Case Status", "Total Days Open"]
         ]
 
         cols = st.multiselect(
-            "Select columns to view",
+            "Select columns",
             df.columns.tolist(),
             default=default_cols
         )
@@ -188,10 +167,9 @@ with tabs[2]:
         buffer.seek(0)
 
         st.download_button(
-            "📥 Download Excel Report",
+            "Download Excel Report",
             buffer,
-            f"report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            f"report_{datetime.now().strftime('%Y%m%d')}.xlsx"
         )
 
 
