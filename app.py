@@ -11,8 +11,9 @@ HISTORY_FILE = "case_history.csv"
 
 
 # ----------------------------
-# COLUMN DETECTION
+# HELPERS
 # ----------------------------
+
 def find_column(df, keywords):
     for col in df.columns:
         for k in keywords:
@@ -21,32 +22,22 @@ def find_column(df, keywords):
     return None
 
 
-# ----------------------------
-# SALESFORCE CLEANING
-# ----------------------------
 def clean_salesforce_export(df):
 
-    # Remove totally empty rows
     df = df.dropna(how="all")
 
-    # Remove Salesforce header junk rows
-    bad_words = ["open cases", "filtered by", "units:"]
+    junk = ["open cases", "filtered by", "units:"]
     df = df[
         ~df.astype(str).apply(
-            lambda row: any(word in str(row).lower() for word in bad_words),
+            lambda r: any(j in str(r).lower() for j in junk),
             axis=1
         )
     ]
 
-    df = df.reset_index(drop=True)
-    return df
+    return df.reset_index(drop=True)
 
 
-# ----------------------------
-# NORMALIZE ADDRESS FUNCTION
-# ----------------------------
 def normalize_address(series):
-
     return (
         series.astype(str)
         .str.lower()
@@ -57,101 +48,148 @@ def normalize_address(series):
 
 
 # ----------------------------
-# FILE UPLOAD
+# TABS
 # ----------------------------
-uploaded_file = st.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
 
-if uploaded_file:
+overview_tab, upload_tab, history_tab = st.tabs(
+    ["📊 Overview", "📂 Upload", "📜 History"]
+)
 
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
 
-    df = clean_salesforce_export(df)
+# ----------------------------
+# UPLOAD TAB
+# ----------------------------
 
-    zone_col = find_column(df, ["fiberhood", "zone"])
-    address_col = find_column(df, ["premises", "address"])
-    date_col = find_column(df, ["date"])
+with upload_tab:
 
-    # Sort latest first
-    if date_col:
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df.sort_values(date_col, ascending=False)
+    uploaded_file = st.file_uploader(
+        "Upload Salesforce export",
+        type=["csv", "xlsx"]
+    )
 
-    # Save history
+    if uploaded_file:
+
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+
+        df = clean_salesforce_export(df)
+
+        date_col = find_column(df, ["date"])
+        case_col = find_column(df, ["case"])
+        address_col = find_column(df, ["premises", "address"])
+
+        # Sort latest first
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df = df.sort_values(date_col, ascending=False)
+
+        # Remove duplicate ticket numbers BEFORE saving
+        if case_col:
+            df = df.drop_duplicates(subset=case_col)
+
+        # Save to history
+        if os.path.exists(HISTORY_FILE):
+            history = pd.read_csv(HISTORY_FILE)
+            history = pd.concat([history, df], ignore_index=True)
+        else:
+            history = df.copy()
+
+        # Remove duplicates globally
+        if case_col:
+            history = history.drop_duplicates(subset=case_col)
+
+        history.to_csv(HISTORY_FILE, index=False)
+
+        st.success(f"{len(df)} new cases added.")
+
+        st.dataframe(df, use_container_width=True)
+
+
+# ----------------------------
+# OVERVIEW TAB
+# ----------------------------
+
+with overview_tab:
+
     if os.path.exists(HISTORY_FILE):
+
         history = pd.read_csv(HISTORY_FILE)
-        history = pd.concat([history, df], ignore_index=True)
-    else:
-        history = df.copy()
 
-    history.to_csv(HISTORY_FILE, index=False)
+        zone_col = find_column(history, ["fiberhood", "zone"])
+        address_col = find_column(history, ["premises", "address"])
+        case_col = find_column(history, ["case"])
 
-    st.success(f"{len(df)} cases loaded successfully.")
+        # Zone filter
+        if zone_col:
+            zones = ["All"] + sorted(history[zone_col].dropna().unique())
+            selected_zone = st.selectbox("Filter Zone", zones)
 
-    st.subheader("Preview")
-    st.dataframe(df, use_container_width=True)
+            if selected_zone != "All":
+                history = history[history[zone_col] == selected_zone]
 
+        # Zone chart
+        if zone_col:
+            st.subheader("Cases per Zone")
+            st.bar_chart(history[zone_col].value_counts())
 
-# ----------------------------
-# OPERATIONS OVERVIEW
-# ----------------------------
-if os.path.exists(HISTORY_FILE):
+        # TRUE repeat detection:
+        # Same premises, DIFFERENT ticket numbers
+        if address_col and case_col:
 
-    st.divider()
-    st.header("📈 Operations Overview")
+            st.subheader("Repeat Premises (New Tickets Same Address)")
 
-    history = pd.read_csv(HISTORY_FILE)
+            history["clean_address"] = normalize_address(history[address_col])
 
-    zone_col = find_column(history, ["fiberhood", "zone"])
-    address_col = find_column(history, ["premises", "address"])
-
-    # Zone filter
-    if zone_col:
-        zones = ["All"] + sorted(history[zone_col].dropna().unique())
-        selected_zone = st.selectbox("Filter Zone", zones)
-
-        if selected_zone != "All":
-            history = history[history[zone_col] == selected_zone]
-
-    # Zone chart
-    if zone_col:
-        st.subheader("Cases per Zone")
-        st.bar_chart(history[zone_col].value_counts())
-
-    # Repeat premises detection
-    if address_col:
-
-        st.subheader("Repeat Fault Locations")
-
-        cleaned_addresses = normalize_address(history[address_col])
-
-        repeat_df = (
-            cleaned_addresses.value_counts()
-            .reset_index()
-        )
-
-        repeat_df.columns = ["Premises", "Tickets"]
-
-        repeat_df = repeat_df[repeat_df["Tickets"] > 1]
-
-        st.dataframe(repeat_df, use_container_width=True)
-
-        if not repeat_df.empty:
-            worst = repeat_df.iloc[0]
-            st.info(
-                f"⚠️ Most repeated premises: {worst['Premises']} "
-                f"({worst['Tickets']} tickets logged)"
+            repeat = (
+                history.groupby("clean_address")[case_col]
+                .nunique()
+                .reset_index()
             )
 
-    # Download cleaned report
-    buffer = io.BytesIO()
-    history.to_excel(buffer, index=False)
-    buffer.seek(0)
+            repeat.columns = ["Premises", "Ticket Count"]
+            repeat = repeat[repeat["Ticket Count"] > 1]
 
-    st.download_button(
-        "⬇ Download Full Clean Report",
-        data=buffer,
-        file_name="network_history.xlsx"
-    )
+            st.dataframe(repeat, use_container_width=True)
+
+            if not repeat.empty:
+                worst = repeat.sort_values(
+                    "Ticket Count", ascending=False
+                ).iloc[0]
+
+                st.warning(
+                    f"⚠️ Highest repeat premises: {worst['Premises']} "
+                    f"({worst['Ticket Count']} different tickets)"
+                )
+
+    else:
+        st.info("Upload data first.")
+
+
+# ----------------------------
+# HISTORY TAB
+# ----------------------------
+
+with history_tab:
+
+    if os.path.exists(HISTORY_FILE):
+
+        history = pd.read_csv(HISTORY_FILE)
+
+        st.subheader("Accumulated Ticket History")
+
+        st.dataframe(history, use_container_width=True)
+
+        buffer = io.BytesIO()
+        history.to_excel(buffer, index=False)
+        buffer.seek(0)
+
+        st.download_button(
+            "⬇ Download Full History",
+            buffer,
+            "network_history.xlsx"
+        )
+
+    else:
+        st.info("No history yet.")
