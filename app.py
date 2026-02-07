@@ -1,15 +1,31 @@
 import streamlit as st
 import pandas as pd
+import os
 import io
 from datetime import datetime
 
-st.set_page_config(page_title="Fiber Maintenance Intelligence", layout="wide")
+st.set_page_config(page_title="Fiber Network Intelligence", layout="wide")
 
-st.title("📡 Fiber Maintenance Intelligence Dashboard")
+st.title("📡 Fiber Network Maintenance Intelligence")
+
+HISTORY_FILE = "case_history.csv"
 
 
 # ---------------------------
-# FILE LOADER
+# LOAD HISTORY SNAPSHOTS
+# ---------------------------
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        return pd.read_csv(HISTORY_FILE)
+    return pd.DataFrame()
+
+
+def save_history(df):
+    df.to_csv(HISTORY_FILE, index=False)
+
+
+# ---------------------------
+# CLEAN SALESFORCE EXPORT
 # ---------------------------
 def load_salesforce_file(file):
 
@@ -25,7 +41,7 @@ def load_salesforce_file(file):
             break
 
     if header_row is None:
-        st.error("Header not found.")
+        st.error("Couldn't detect Case Number header.")
         st.stop()
 
     if file.name.endswith(".csv"):
@@ -33,6 +49,7 @@ def load_salesforce_file(file):
     else:
         df = pd.read_excel(file, skiprows=header_row)
 
+    # Remove totals/subtotals
     if "Case Number" in df.columns:
         df = df[
             ~df["Case Number"]
@@ -44,11 +61,12 @@ def load_salesforce_file(file):
 
 
 # ---------------------------
-# PARSE BLOCK NAME
+# PARSE NETWORK HIERARCHY
 # ---------------------------
 def parse_block_name(df):
 
     if "Block Name" in df.columns:
+
         parts = df["Block Name"].astype(str).str.split("-", expand=True)
 
         if parts.shape[1] >= 5:
@@ -60,13 +78,35 @@ def parse_block_name(df):
 
 
 # ---------------------------
+# DETECT REPEAT INFRASTRUCTURE FAULTS
+# ---------------------------
+def detect_repeat_faults(history):
+
+    if history.empty:
+        return pd.DataFrame()
+
+    required = ["Zone", "AG", "Block"]
+
+    if not all(col in history.columns for col in required):
+        return pd.DataFrame()
+
+    repeat = (
+        history.groupby(required)
+        .size()
+        .reset_index(name="Occurrences")
+        .sort_values("Occurrences", ascending=False)
+    )
+
+    return repeat[repeat["Occurrences"] > 2]
+
+
+# ---------------------------
 # TABS
 # ---------------------------
 tabs = st.tabs([
-    "📊 Overview",
-    "📁 Upload",
-    "📈 Reports",
-    "📝 Tasks"
+    "📊 Operations Overview",
+    "📁 Upload Snapshot",
+    "📈 History & Reports"
 ])
 
 
@@ -75,132 +115,100 @@ tabs = st.tabs([
 # ---------------------------
 with tabs[1]:
 
-    st.header("Upload Salesforce Export")
+    st.header("Upload Salesforce Snapshot")
 
-    file = st.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
+    file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
     if file:
-        df = load_salesforce_file(file)
-        df = parse_block_name(df)
 
-        st.session_state["data"] = df
+        new_df = load_salesforce_file(file)
+        new_df = parse_block_name(new_df)
 
-        st.success(f"{len(df)} cases loaded.")
-        st.dataframe(df.head(15))
+        # Snapshot timestamp
+        new_df["Snapshot Time"] = datetime.now()
+
+        history_df = load_history()
+
+        combined = pd.concat([history_df, new_df])
+
+        save_history(combined)
+
+        st.success(
+            f"{len(new_df)} cases added. "
+            f"{len(combined)} total historical records."
+        )
 
 
 # ---------------------------
-# OVERVIEW TAB (DRILL DOWN)
+# OVERVIEW TAB
 # ---------------------------
 with tabs[0]:
 
-    st.header("Fault Location Hierarchy")
+    st.header("Network Operations Snapshot")
 
-    if "data" not in st.session_state:
-        st.info("Upload export first.")
+    df = load_history()
+
+    if df.empty:
+        st.info("Upload reports to start building intelligence.")
     else:
-        df = st.session_state["data"]
 
-        # ---------- ZONE LEVEL ----------
-        st.subheader("Zones")
+        # KPIs
+        col1, col2, col3 = st.columns(3)
 
-        zone_counts = df["Zone"].value_counts()
-        st.bar_chart(zone_counts)
+        col1.metric("Historical Records", len(df))
 
-        selected_zone = st.selectbox(
-            "Select Zone",
-            ["All"] + sorted(df["Zone"].dropna().unique().tolist())
-        )
+        if "Zone" in df.columns:
+            col2.metric("Zones Covered", df["Zone"].nunique())
 
-        # ---------- AG LEVEL ----------
-        if selected_zone != "All":
-            zone_df = df[df["Zone"] == selected_zone]
-        else:
-            zone_df = df
-
-        st.subheader("AG Areas")
-
-        ag_counts = zone_df["AG"].value_counts()
-        st.bar_chart(ag_counts)
-
-        selected_ag = st.selectbox(
-            "Select AG",
-            ["All"] + sorted(zone_df["AG"].dropna().unique().tolist())
-        )
-
-        # ---------- BLOCK LEVEL ----------
-        if selected_ag != "All":
-            ag_df = zone_df[zone_df["AG"] == selected_ag]
-        else:
-            ag_df = zone_df
-
-        st.subheader("Blocks")
-
-        block_counts = ag_df["Block"].value_counts()
-        st.bar_chart(block_counts)
+        if "AG" in df.columns:
+            col3.metric("AG Coverage", df["AG"].nunique())
 
         st.divider()
 
-        # Optional table view
-        st.subheader("Filtered Cases")
-        st.dataframe(ag_df)
+        # Zone clustering
+        if "Zone" in df.columns:
+            st.subheader("Fault Clustering by Zone")
+            st.bar_chart(df["Zone"].value_counts())
+
+        # Repeat faults
+        repeats = detect_repeat_faults(df)
+
+        if not repeats.empty:
+            st.subheader("⚠️ Repeat Infrastructure Faults")
+            st.dataframe(repeats)
 
 
 # ---------------------------
-# REPORTS TAB
+# HISTORY TAB
 # ---------------------------
 with tabs[2]:
 
-    st.header("Custom Reports")
+    st.header("Historical Data Explorer")
 
-    if "data" not in st.session_state:
-        st.warning("Upload data first.")
+    df = load_history()
+
+    if df.empty:
+        st.warning("No historical data yet.")
     else:
-        df = st.session_state["data"]
 
-        cols = st.multiselect(
-            "Select columns",
-            df.columns.tolist(),
-            default=df.columns.tolist()
-        )
+        # Filter by zone
+        if "Zone" in df.columns:
+            zone = st.selectbox(
+                "Filter by Zone",
+                ["All"] + sorted(df["Zone"].dropna().unique())
+            )
 
-        filtered_df = df[cols]
-        st.dataframe(filtered_df)
+            if zone != "All":
+                df = df[df["Zone"] == zone]
+
+        st.dataframe(df)
 
         buffer = io.BytesIO()
-        filtered_df.to_excel(buffer, index=False, engine="openpyxl")
+        df.to_excel(buffer, index=False, engine="openpyxl")
         buffer.seek(0)
 
         st.download_button(
-            "Download Excel Report",
+            "Download Historical Dataset",
             buffer,
-            f"report_{datetime.now().strftime('%Y%m%d')}.xlsx"
+            "fiber_history.xlsx"
         )
-
-
-# ---------------------------
-# TASKS TAB
-# ---------------------------
-with tabs[3]:
-
-    st.header("Tasks / Reminders")
-
-    if "tasks" not in st.session_state:
-        st.session_state["tasks"] = []
-
-    with st.form("task_form"):
-        task = st.text_input("Task")
-        due = st.date_input("Due Date")
-        priority = st.selectbox("Priority", ["Low", "Medium", "High"])
-
-        submit = st.form_submit_button("Add Task")
-
-        if submit and task:
-            st.session_state["tasks"].append({
-                "Task": task,
-                "Due": due,
-                "Priority": priority
-            })
-
-    if st.session_state["tasks"]:
-        st.dataframe(pd.DataFrame(st.session_state["tasks"]))
