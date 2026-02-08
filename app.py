@@ -22,21 +22,6 @@ def find_column(df, keywords):
     return None
 
 
-def clean_salesforce_export(df):
-
-    df = df.dropna(how="all")
-
-    junk = ["open cases", "filtered by", "units:"]
-    df = df[
-        ~df.astype(str).apply(
-            lambda r: any(j in str(r).lower() for j in junk),
-            axis=1
-        )
-    ]
-
-    return df.reset_index(drop=True)
-
-
 def normalize_address(series):
     return (
         series.astype(str)
@@ -74,37 +59,40 @@ with upload_tab:
         else:
             df = pd.read_excel(uploaded_file)
 
-        df = clean_salesforce_export(df)
-
-        date_col = find_column(df, ["date"])
         case_col = find_column(df, ["case"])
-        address_col = find_column(df, ["premises", "address"])
+        date_col = find_column(df, ["date"])
 
-        # Sort latest first
+        # Sort newest first
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
             df = df.sort_values(date_col, ascending=False)
 
-        # Remove duplicate ticket numbers BEFORE saving
-        if case_col:
-            df = df.drop_duplicates(subset=case_col)
-
-        # Save to history
+        # Load existing history
         if os.path.exists(HISTORY_FILE):
             history = pd.read_csv(HISTORY_FILE)
-            history = pd.concat([history, df], ignore_index=True)
         else:
-            history = df.copy()
+            history = pd.DataFrame()
 
-        # Remove duplicates globally
+        before = len(history)
+
+        # Merge new data
+        history = pd.concat([history, df], ignore_index=True)
+
         if case_col:
             history = history.drop_duplicates(subset=case_col)
 
         history.to_csv(HISTORY_FILE, index=False)
 
-        st.success(f"{len(df)} new cases added.")
+        added = len(history) - before
 
-        st.dataframe(df, use_container_width=True)
+        st.success(f"✅ {added} new tickets saved to history.")
+
+        if added == 0:
+            st.warning(
+                "No new tickets detected (probably already uploaded earlier)."
+            )
+
+        st.dataframe(df.head(20), use_container_width=True)
 
 
 # ----------------------------
@@ -121,26 +109,18 @@ with overview_tab:
         address_col = find_column(history, ["premises", "address"])
         case_col = find_column(history, ["case"])
 
-        # Zone filter
-        if zone_col:
-            zones = ["All"] + sorted(history[zone_col].dropna().unique())
-            selected_zone = st.selectbox("Filter Zone", zones)
-
-            if selected_zone != "All":
-                history = history[history[zone_col] == selected_zone]
-
-        # Zone chart
         if zone_col:
             st.subheader("Cases per Zone")
             st.bar_chart(history[zone_col].value_counts())
 
-        # TRUE repeat detection:
-        # Same premises, DIFFERENT ticket numbers
+        # Repeat premises detection
         if address_col and case_col:
 
-            st.subheader("Repeat Premises (New Tickets Same Address)")
+            st.subheader("Repeat Premises")
 
-            history["clean_address"] = normalize_address(history[address_col])
+            history["clean_address"] = normalize_address(
+                history[address_col]
+            )
 
             repeat = (
                 history.groupby("clean_address")[case_col]
@@ -159,12 +139,12 @@ with overview_tab:
                 ).iloc[0]
 
                 st.warning(
-                    f"⚠️ Highest repeat premises: {worst['Premises']} "
-                    f"({worst['Ticket Count']} different tickets)"
+                    f"⚠️ Most repeated premises: {worst['Premises']} "
+                    f"({worst['Ticket Count']} tickets)"
                 )
 
     else:
-        st.info("Upload data first.")
+        st.info("Upload a file first.")
 
 
 # ----------------------------
@@ -177,7 +157,7 @@ with history_tab:
 
         history = pd.read_csv(HISTORY_FILE)
 
-        st.subheader("Accumulated Ticket History")
+        st.subheader("Ticket History")
 
         st.dataframe(history, use_container_width=True)
 
@@ -192,4 +172,4 @@ with history_tab:
         )
 
     else:
-        st.info("No history yet.")
+        st.info("No history saved yet.")
